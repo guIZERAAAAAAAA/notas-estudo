@@ -8,3 +8,9 @@ PARA UTILIZar O GIFT NA MINHA MAQUINA EU PRECISO comfigura determinado comandos 
 ```bash 
 gif config --global
 . 
+
+## como comfigurar github 
+
+## ssh - como configurar a maquina para github
+
+## como criar um repositorio 
