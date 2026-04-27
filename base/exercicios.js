@@ -1,6 +1,9 @@
 
 function exemplo1() {
     alert("oie")
+
+//estrutura
+
 }
 // getelement
 const batata = document.getElementById("exercicio")
