@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Mini Bloons TD</title>
+<style>
+  body { margin: 0; background: #222; color: #fff; font-family: Arial, sans-serif;
+         display: flex; flex-direction: column; align-items: center; }
+  #hud { display: flex; gap: 20px; padding: 10px; font-size: 18px; align-items: center; }
+  button { padding: 8px 14px; font-size: 15px; cursor: pointer; border: none;
+           border-radius: 6px; background: #4caf50; color: #fff; }
+  button:disabled { background: #666; cursor: not-allowed; }
+  button.sel { outline: 3px solid yellow; }
+  canvas { background: #5da84a; border: 3px solid #000; cursor: crosshair; }
+  #msg { height: 24px; font-weight: bold; }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <span>❤️ Vidas: <b id="vidas">20</b></span>
+    <span>💰 Dinheiro: <b id="dinheiro">200</b></span>
+    <span>🌊 Rodada: <b id="rodada">0</b></span>
+    <button id="btnTorre">Comprar Macaco (100)</button>
+    <button id="btnRodada">Iniciar Rodada</button>
+  </div>
+  <div id="msg"></div>
+  <canvas id="c" width="900" height="560"></canvas>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ---------- Caminho (waypoints) ----------
+const caminho = [
+  {x: 0,   y: 80},
+  {x: 700, y: 80},
+  {x: 700, y: 240},
+  {x: 150, y: 240},
+  {x: 150, y: 400},
+  {x: 750, y: 400},
+  {x: 750, y: 520},
+  {x: 900, y: 520}
+];
+const LARGURA_CAMINHO = 44;
+
+// ---------- Estado ----------
+let vidas = 20, dinheiro = 200, rodada = 0;
+let baloes = [], torres = [], dardos = [];
+let fila = [];            // baloes a spawnar na rodada
+let spawnTimer = 0;
+let rodadaAtiva = false;
+let comprando = false;
+let mouse = {x: 0, y: 0};
+let torreSelecionada = null;
+let gameOver = false;
+
+// Tipos de balão: vida, velocidade, cor, recompensa
+const TIPOS = [
+  {hp: 1, vel: 1.2, cor: '#e53935', ganho: 1},  // vermelho
+  {hp: 2, vel: 1.6, cor: '#1e88e5', ganho: 2},  // azul
+  {hp: 3, vel: 2.0, cor: '#43a047', ganho: 3},  // verde
+  {hp: 4, vel: 2.6, cor: '#fdd835', ganho: 4},  // amarelo
+  {hp: 6, vel: 3.0, cor: '#ec407a', ganho: 6}   // rosa
+];
+
+// ---------- Utilidades ----------
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function distanciaAoSegmento(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function sobreOCaminho(p) {
+  for (let i = 0; i < caminho.length - 1; i++) {
+    if (distanciaAoSegmento(p, caminho[i], caminho[i + 1]) < LARGURA_CAMINHO / 2 + 18) return true;
+  }
+  return false;
+}
+
+function msg(t) { document.getElementById('msg').textContent = t; }
+
+function atualizarHUD() {
+  document.getElementById('vidas').textContent = vidas;
+  document.getElementById('dinheiro').textContent = dinheiro;
+  document.getElementById('rodada').textContent = rodada;
+  document.getElementById('btnTorre').disabled = dinheiro < 100 || gameOver;
+  document.getElementById('btnRodada').disabled = rodadaAtiva || gameOver;
+}
+
+// ---------- Rodadas ----------
+function iniciarRodada() {
+  if (rodadaAtiva || gameOver) return;
+  rodada++;
+  rodadaAtiva = true;
+  fila = [];
+  const qtd = 8 + rodada * 4;
+  const maxTipo = Math.min(TIPOS.length - 1, Math.floor(rodada / 2));
+  for (let i = 0; i < qtd; i++) {
+    fila.push(Math.floor(Math.random() * (maxTipo + 1)));
+  }
+  spawnTimer = 0;
+  msg('Rodada ' + rodada + ' iniciada!');
+  atualizarHUD();
+}
+
+function criarBalao(tipoIdx) {
+  const t = TIPOS[tipoIdx];
+  baloes.push({
+    x: caminho[0].x, y: caminho[0].y,
+    alvo: 1, tipo: tipoIdx, hp: t.hp, vel: t.vel, r: 14
+  });
+}
+
+// ---------- Torres ----------
+function criarTorre(x, y) {
+  torres.push({x, y, alcance: 130, cadencia: 40, tempo: 0, nivel: 1, angulo: 0, custoUp: 150});
+}
+
+// ---------- Update ----------
+function update() {
+  if (gameOver) return;
+
+  // Spawn
+  if (rodadaAtiva && fila.length > 0) {
+    spawnTimer--;
+    if (spawnTimer <= 0) {
+      criarBalao(fila.shift());
+      spawnTimer = 35;
+    }
+  }
+
+  // Mover balões
+  for (const b of baloes) {
+    const alvo = caminho[b.alvo];
+    const dx = alvo.x - b.x, dy = alvo.y - b.y;
+    const d = Math.hypot(dx, dy);
+    if (d <= b.vel) {
+      b.x = alvo.x; b.y = alvo.y; b.alvo++;
+      if (b.alvo >= caminho.length) { b.chegou = true; }
+    } else {
+      b.x += (dx / d) * b.vel;
+      b.y += (dy / d) * b.vel;
+    }
+  }
+
+  // Balões que chegaram ao fim
+  for (const b of baloes) {
+    if (b.chegou) {
+      vidas -= b.hp;
+      b.morto = true;
+    }
+  }
+  if (vidas <= 0) {
+    vidas = 0; gameOver = true;
+    msg('💀 Game Over! Recarregue a página para jogar de novo.');
+  }
+
+  // Torres atiram
+  for (const t of torres) {
+    t.tempo--;
+    // alvo: balão mais avançado dentro do alcance
+    let alvo = null;
+    for (const b of baloes) {
+      if (b.morto) continue;
+      if (dist(t, b) <= t.alcance) {
+        if (!alvo || b.alvo > alvo.alvo) alvo = b;
+      }
+    }
+    if (alvo) {
+      t.angulo = Math.atan2(alvo.y - t.y, alvo.x - t.x);
+      if (t.tempo <= 0) {
+        dardos.push({
+          x: t.x, y: t.y,
+          vx: Math.cos(t.angulo) * 9,
+          vy: Math.sin(t.angulo) * 9,
+          vida: 40, dano: t.nivel
+        });
+        t.tempo = Math.max(10, t.cadencia - (t.nivel - 1) * 6);
+      }
+    }
+  }
+
+  // Dardos
+  for (const d of dardos) {
+    d.x += d.vx; d.y += d.vy; d.vida--;
+    for (const b of baloes) {
+      if (b.morto || d.usado) continue;
+      if (dist(d, b) < b.r + 4) {
+        b.hp -= d.dano;
+        d.usado = true;
+        if (b.hp <= 0) {
+          b.morto = true;
+          dinheiro += TIPOS[b.tipo].ganho;
+        } else {
+          // atualiza cor/velocidade conforme a vida restante
+          const novoTipo = Math.max(0, Math.min(b.tipo, b.hp - 1));
+          b.tipo = novoTipo;
+          b.vel = TIPOS[novoTipo].vel;
+        }
+      }
+    }
+  }
+
+  baloes = baloes.filter(b => !b.morto);
+  dardos = dardos.filter(d => !d.usado && d.vida > 0);
+
+  // Fim de rodada
+  if (rodadaAtiva && fila.length === 0 && baloes.length === 0) {
+    rodadaAtiva = false;
+    dinheiro += 100 + rodada * 10;
+    msg('✅ Rodada ' + rodada + ' completa! Bônus recebido.');
+  }
+
+  atualizarHUD();
+}
+
+// ---------- Desenho ----------
+function desenharCaminho() {
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#c8a96a';
+  ctx.lineWidth = LARGURA_CAMINHO;
+  ctx.beginPath();
+  ctx.moveTo(caminho[0].x, caminho[0].y);
+  for (let i = 1; i < caminho.length; i++) ctx.lineTo(caminho[i].x, caminho[i].y);
+  ctx.stroke();
+}
+
+function desenharTorre(t, selecionada) {
+  if (selecionada) {
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.beginPath(); ctx.arc(t.x, t.y, t.alcance, 0, Math.PI * 2); ctx.fill();
+  }
+  // corpo
+  ctx.fillStyle = '#8d5524';
+  ctx.beginPath(); ctx.arc(t.x, t.y, 18, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
+  // "braço" apontando
+  ctx.strokeStyle = '#5d3a1a'; ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(t.x, t.y);
+  ctx.lineTo(t.x + Math.cos(t.angulo) * 22, t.y + Math.sin(t.angulo) * 22);
+  ctx.stroke();
+  // nível
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('Nv' + t.nivel, t.x, t.y + 32);
+}
+
+function desenhar() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  desenharCaminho();
+
+  for (const t of torres) desenharTorre(t, t === torreSelecionada);
+
+  for (const b of baloes) {
+    ctx.fillStyle = TIPOS[b.tipo].cor;
+    ctx.beginPath(); ctx.ellipse(b.x, b.y, b.r, b.r * 1.2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.arc(b.x - 5, b.y - 6, 3, 0, Math.PI * 2); ctx.fill();
+  }
+
+  ctx.fillStyle = '#fff';
+  for (const d of dardos) {
+    ctx.beginPath(); ctx.arc(d.x, d.y, 3, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Pré-visualização da torre ao comprar
+  if (comprando) {
+    const valido = !sobreOCaminho(mouse) && !torres.some(t => dist(t, mouse) < 40);
+    ctx.fillStyle = valido ? 'rgba(255,255,255,0.25)' : 'rgba(255,0,0,0.3)';
+    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 130, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = valido ? '#8d5524' : '#a33';
+    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 18, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Painel de upgrade
+  if (torreSelecionada && !comprando) {
+    const t = torreSelecionada;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(10, canvas.height - 50, 330, 40);
+    ctx.fillStyle = '#fff'; ctx.font = '15px Arial'; ctx.textAlign = 'left';
+    ctx.fillText('Clique na torre de novo p/ upar (' + t.custoUp + ') | Vender: tecla V', 18, canvas.height - 25);
+  }
+}
+
+function loop() {
+  update();
+  desenhar();
+  requestAnimationFrame(loop);
+}
+
+// ---------- Entrada ----------
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - r.left;
+  mouse.y = e.clientY - r.top;
+});
+
+canvas.addEventListener('click', () => {
+  if (gameOver) return;
+
+  if (comprando) {
+    const valido = !sobreOCaminho(mouse) && !torres.some(t => dist(t, mouse) < 40);
+    if (valido && dinheiro >= 100) {
+      dinheiro -= 100;
+      criarTorre(mouse.x, mouse.y);
+      comprando = false;
+      document.getElementById('btnTorre').classList.remove('sel');
+      msg('Macaco colocado!');
+    } else {
+      msg('Local inválido!');
+    }
+    return;
+  }
+
+  // Selecionar / upar torre
+  const clicada = torres.find(t => dist(t, mouse) < 20);
+  if (clicada) {
+    if (torreSelecionada === clicada) {
+      if (dinheiro >= clicada.custoUp && clicada.nivel < 5) {
+        dinheiro -= clicada.custoUp;
+        clicada.nivel++;
+        clicada.alcance += 15;
+        clicada.custoUp = Math.floor(clicada.custoUp * 1.6);
+        msg('Torre melhorada para o nível ' + clicada.nivel + '!');
+      } else if (clicada.nivel >= 5) {
+        msg('Nível máximo!');
+      } else {
+        msg('Dinheiro insuficiente!');
+      }
+    } else {
+      torreSelecionada = clicada;
+    }
+  } else {
+    torreSelecionada = null;
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (e.key.toLowerCase() === 'v' && torreSelecionada) {
+    dinheiro += 60 + (torreSelecionada.nivel - 1) * 50;
+    torres = torres.filter(t => t !== torreSelecionada);
+    torreSelecionada = null;
+    msg('Torre vendida.');
+  }
+  if (e.key === 'Escape') {
+    comprando = false;
+    document.getElementById('btnTorre').classList.remove('sel');
+  }
+});
+
+document.getElementById('btnTorre').onclick = () => {
+  comprando = !comprando;
+  torreSelecionada = null;
+  document.getElementById('btnTorre').classList.toggle('sel', comprando);
+  if (comprando) msg('Clique em um lugar fora do caminho (ESC cancela).');
+};
+document.getElementById('btnRodada').onclick = iniciarRodada;
+
+atualizarHUD();
+loop();
+</script>
+</body>
+</html>
