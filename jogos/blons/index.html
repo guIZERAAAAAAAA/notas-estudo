@@ -6,13 +6,46 @@
 <style>
   body { margin: 0; background: #222; color: #fff; font-family: Arial, sans-serif;
          display: flex; flex-direction: column; align-items: center; }
-  #hud { display: flex; gap: 20px; padding: 10px; font-size: 18px; align-items: center; }
+  #hud { display: flex; gap: 16px; padding: 10px; font-size: 18px; align-items: center; flex-wrap: wrap; justify-content: center; }
   button { padding: 8px 14px; font-size: 15px; cursor: pointer; border: none;
            border-radius: 6px; background: #4caf50; color: #fff; }
   button:disabled { background: #666; cursor: not-allowed; }
-  button.sel { outline: 3px solid yellow; }
-  canvas { background: #5da84a; border: 3px solid #000; cursor: crosshair; }
+  canvas { background: #5da84a; border: 3px solid #000; cursor: crosshair; display: block; }
   #msg { height: 24px; font-weight: bold; }
+
+  /* Botão auto início */
+  #btnAuto { background: #666; }
+  #btnAuto.on { background: #2e7d32; outline: 2px solid #a5d6a7; }
+
+  /* Botões de velocidade */
+  #velocidade { display: flex; gap: 4px; }
+  .btnVel { background: #555; padding: 8px 12px; }
+  .btnVel.sel { background: #1e88e5; outline: 2px solid #90caf9; }
+
+  #jogo { display: flex; align-items: flex-start; }
+
+  /* ---------- Painel lateral direito ---------- */
+  #painel {
+    width: 200px; height: 560px; box-sizing: content-box;
+    background: #3a2a1a; border: 3px solid #000; border-left: none;
+    display: flex; flex-direction: column; gap: 10px; padding: 10px;
+    overflow-y: auto;
+  }
+  #painel h2 { margin: 0 0 4px; font-size: 18px; text-align: center; color: #ffd54f; }
+  .card {
+    display: flex; flex-direction: column; gap: 4px; text-align: left;
+    background: #5a4128; border: 2px solid #8d6e3f; border-radius: 8px;
+    padding: 10px; color: #fff; cursor: pointer; font-size: 13px;
+  }
+  .card:hover:not(:disabled) { background: #6d4f2f; }
+  .card:disabled { background: #3d3d3d; border-color: #555; color: #999; cursor: not-allowed; }
+  .card.sel { outline: 3px solid yellow; }
+  .card .topo { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold; }
+  .card .bolinha { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #000; flex-shrink: 0; }
+  .card .preco { color: #ffd54f; font-weight: bold; }
+  .card .tecla { margin-left: auto; font-size: 11px; background: rgba(0,0,0,0.4);
+                 padding: 2px 6px; border-radius: 4px; }
+  .card .stats { color: #ddd; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -20,11 +53,22 @@
     <span>❤️ Vidas: <b id="vidas">20</b></span>
     <span>💰 Dinheiro: <b id="dinheiro">200</b></span>
     <span>🌊 Rodada: <b id="rodada">0</b></span>
-    <button id="btnTorre">Comprar Macaco (100)</button>
+    <button id="btnAuto">🔁 Auto início: OFF</button>
+    <div id="velocidade">
+      <button class="btnVel sel" id="btnVel1">1x</button>
+      <button class="btnVel" id="btnVel2">2x</button>
+    </div>
     <button id="btnRodada">Iniciar Rodada</button>
   </div>
   <div id="msg"></div>
-  <canvas id="c" width="900" height="560"></canvas>
+
+  <div id="jogo">
+    <canvas id="c" width="900" height="560"></canvas>
+    <div id="painel">
+      <h2>🐵 Macacos</h2>
+      <!-- cards gerados via JS -->
+    </div>
+  </div>
 
 <script>
 const canvas = document.getElementById('c');
@@ -43,13 +87,27 @@ const caminho = [
 ];
 const LARGURA_CAMINHO = 44;
 
+// ---------- Tipos de macaco ----------
+const TORRES_TIPOS = [
+  { nome: 'Macaco Dardo',    emoji: '🐵', custo: 100, alcance: 130, cadencia: 40, dano: 1, velDardo: 9,  cor: '#8d5524' },
+  { nome: 'Macaco Rápido',   emoji: '⚡', custo: 175, alcance: 110, cadencia: 18, dano: 1, velDardo: 10, cor: '#d4891f' },
+  { nome: 'Macaco Atirador', emoji: '🎯', custo: 300, alcance: 230, cadencia: 75, dano: 3, velDardo: 14, cor: '#3f51b5' }
+];
+
+// ---------- Auto início / velocidade ----------
+const ESPERA_ENTRE = 180;   // frames (~3s) de espera antes de iniciar a rodada automaticamente
+let autoInicio = false;
+let contagem = ESPERA_ENTRE;
+let velocidade = 1;         // 1 ou 2
+
 // ---------- Estado ----------
 let vidas = 20, dinheiro = 200, rodada = 0;
 let baloes = [], torres = [], dardos = [];
-let fila = [];            // baloes a spawnar na rodada
+let fila = [];
 let spawnTimer = 0;
 let rodadaAtiva = false;
 let comprando = false;
+let tipoComprando = 0;
 let mouse = {x: 0, y: 0};
 let torreSelecionada = null;
 let gameOver = false;
@@ -72,6 +130,14 @@ function distanciaAoSegmento(p, a, b) {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+function distanciaAoCaminho(p) {
+  let menor = Infinity;
+  for (let i = 0; i < caminho.length - 1; i++) {
+    menor = Math.min(menor, distanciaAoSegmento(p, caminho[i], caminho[i + 1]));
+  }
+  return menor;
+}
+
 function sobreOCaminho(p) {
   for (let i = 0; i < caminho.length - 1; i++) {
     if (distanciaAoSegmento(p, caminho[i], caminho[i + 1]) < LARGURA_CAMINHO / 2 + 18) return true;
@@ -81,12 +147,198 @@ function sobreOCaminho(p) {
 
 function msg(t) { document.getElementById('msg').textContent = t; }
 
+// ---------- Fundo com textura (gerado uma vez) ----------
+const fundo = document.createElement('canvas');
+fundo.width = canvas.width;
+fundo.height = canvas.height;
+
+// gerador pseudo-aleatório com semente (textura sempre igual)
+function criarRng(semente) {
+  let s = semente >>> 0;
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function gerarFundo() {
+  const g = fundo.getContext('2d');
+  const rnd = criarRng(1234);
+  const W = fundo.width, H = fundo.height;
+  const escolher = arr => arr[Math.floor(rnd() * arr.length)];
+
+  // ----- Grama: base -----
+  g.fillStyle = '#5da84a';
+  g.fillRect(0, 0, W, H);
+
+  // manchas grandes e suaves (variação de tom)
+  for (let i = 0; i < 45; i++) {
+    const claro = rnd() < 0.5;
+    g.fillStyle = claro ? 'rgba(150,215,100,0.07)' : 'rgba(30,90,30,0.07)';
+    g.beginPath();
+    g.arc(rnd() * W, rnd() * H, 30 + rnd() * 50, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // pontinhos de ruído
+  const tonsPonto = ['#68b552', '#52994a', '#6cbb55', '#4a8a3c', '#74c05c'];
+  for (let i = 0; i < 7000; i++) {
+    g.fillStyle = escolher(tonsPonto);
+    g.globalAlpha = 0.35 + rnd() * 0.3;
+    g.fillRect(rnd() * W, rnd() * H, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  g.globalAlpha = 1;
+
+  // folhinhas de grama
+  const tonsFolha = ['#7ccc62', '#4a8c3d', '#6ab454', '#3f7d35'];
+  g.lineCap = 'round';
+  for (let i = 0; i < 1600; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    const ang = -Math.PI / 2 + (rnd() - 0.5) * 0.9;
+    const len = 3 + rnd() * 5;
+    g.strokeStyle = escolher(tonsFolha);
+    g.globalAlpha = 0.55;
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+
+  // tufos de grama (grupos de folhas mais escuras)
+  for (let i = 0; i < 90; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    if (distanciaAoCaminho({x, y}) < LARGURA_CAMINHO / 2 + 10) continue;
+    g.strokeStyle = '#3a7530';
+    g.lineWidth = 1.5;
+    for (let k = 0; k < 4; k++) {
+      const ang = -Math.PI / 2 + (k - 1.5) * 0.4;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + Math.cos(ang) * 7, y + Math.sin(ang) * 7);
+      g.stroke();
+    }
+  }
+
+  // florzinhas
+  const coresFlor = ['#ffffff', '#fff176', '#f48fb1', '#ce93d8'];
+  for (let i = 0; i < 35; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    if (distanciaAoCaminho({x, y}) < LARGURA_CAMINHO / 2 + 14) continue;
+    g.fillStyle = escolher(coresFlor);
+    g.beginPath(); g.arc(x, y, 2, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#f9a825';
+    g.beginPath(); g.arc(x, y, 0.8, 0, Math.PI * 2); g.fill();
+  }
+
+  // ----- Caminho de terra -----
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  const tracar = largura => {
+    g.lineWidth = largura;
+    g.beginPath();
+    g.moveTo(caminho[0].x, caminho[0].y);
+    for (let i = 1; i < caminho.length; i++) g.lineTo(caminho[i].x, caminho[i].y);
+    g.stroke();
+  };
+
+  g.strokeStyle = '#8f7240';             // borda escura
+  tracar(LARGURA_CAMINHO + 8);
+  g.strokeStyle = '#c8a96a';             // terra base
+  tracar(LARGURA_CAMINHO);
+  g.strokeStyle = 'rgba(225,200,140,0.35)'; // centro mais claro (terra batida)
+  tracar(LARGURA_CAMINHO - 16);
+
+  // grãos de terra (só dentro do caminho)
+  const tonsTerra = ['#b8995a', '#d8bb7e', '#a88a4c', '#c2a262', '#e0c88f', '#9c7e45'];
+  for (let i = 0; i < 6000; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    if (distanciaAoCaminho({x, y}) > LARGURA_CAMINHO / 2 - 2) continue;
+    g.fillStyle = escolher(tonsTerra);
+    g.globalAlpha = 0.5 + rnd() * 0.4;
+    g.fillRect(x, y, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  g.globalAlpha = 1;
+
+  // pedrinhas
+  let pedras = 0, tentativas = 0;
+  while (pedras < 140 && tentativas < 5000) {
+    tentativas++;
+    const x = rnd() * W, y = rnd() * H;
+    if (distanciaAoCaminho({x, y}) > LARGURA_CAMINHO / 2 - 5) continue;
+    const r = 1.2 + rnd() * 2.2;
+    g.fillStyle = escolher(['#8c7a5b', '#a39274', '#77684d', '#b3a384']);
+    g.beginPath();
+    g.ellipse(x, y, r * 1.2, r, rnd() * Math.PI, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.25)';   // brilho
+    g.beginPath(); g.arc(x - r * 0.3, y - r * 0.3, r * 0.4, 0, Math.PI * 2); g.fill();
+    pedras++;
+  }
+
+  // alguns tufinhos de grama invadindo a borda do caminho
+  for (let i = 0; i < 160; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    const d = distanciaAoCaminho({x, y});
+    if (d < LARGURA_CAMINHO / 2 + 1 || d > LARGURA_CAMINHO / 2 + 6) continue;
+    g.strokeStyle = escolher(['#4a8c3d', '#6ab454', '#3f7d35']);
+    g.lineWidth = 1.2;
+    for (let k = 0; k < 3; k++) {
+      const ang = -Math.PI / 2 + (k - 1) * 0.5;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + Math.cos(ang) * 5, y + Math.sin(ang) * 5);
+      g.stroke();
+    }
+  }
+}
+
+// ---------- Painel lateral ----------
+const painel = document.getElementById('painel');
+const cards = [];
+
+TORRES_TIPOS.forEach((tipo, i) => {
+  const b = document.createElement('button');
+  b.className = 'card';
+  b.innerHTML =
+    '<div class="topo"><span class="bolinha" style="background:' + tipo.cor + '"></span>' +
+    '<span>' + tipo.nome + '</span><span class="tecla">' + (i + 1) + '</span></div>' +
+    '<div class="preco">💰 ' + tipo.custo + '</div>' +
+    '<div class="stats">Dano: ' + tipo.dano + '<br>Alcance: ' + tipo.alcance +
+    '<br>Cadência: ' + (60 / tipo.cadencia).toFixed(1) + ' tiros/s</div>';
+  b.onclick = () => { selecionarTipo(i); b.blur(); };
+  painel.appendChild(b);
+  cards.push(b);
+});
+
+function selecionarTipo(i) {
+  if (gameOver) return;
+  if (comprando && tipoComprando === i) {
+    comprando = false;
+    msg('');
+  } else if (dinheiro >= TORRES_TIPOS[i].custo) {
+    comprando = true;
+    tipoComprando = i;
+    torreSelecionada = null;
+    msg('Clique em um lugar fora do caminho (ESC cancela).');
+  } else {
+    msg('Dinheiro insuficiente para ' + TORRES_TIPOS[i].nome + '!');
+  }
+  atualizarHUD();
+}
+
 function atualizarHUD() {
   document.getElementById('vidas').textContent = vidas;
   document.getElementById('dinheiro').textContent = dinheiro;
   document.getElementById('rodada').textContent = rodada;
-  document.getElementById('btnTorre').disabled = dinheiro < 100 || gameOver;
   document.getElementById('btnRodada').disabled = rodadaAtiva || gameOver;
+  cards.forEach((c, i) => {
+    c.disabled = gameOver || dinheiro < TORRES_TIPOS[i].custo;
+    c.classList.toggle('sel', comprando && tipoComprando === i);
+  });
 }
 
 // ---------- Rodadas ----------
@@ -114,13 +366,31 @@ function criarBalao(tipoIdx) {
 }
 
 // ---------- Torres ----------
-function criarTorre(x, y) {
-  torres.push({x, y, alcance: 130, cadencia: 40, tempo: 0, nivel: 1, angulo: 0, custoUp: 150});
+function criarTorre(x, y, tipoIdx) {
+  const tp = TORRES_TIPOS[tipoIdx];
+  torres.push({
+    x, y, tipoIdx,
+    alcance: tp.alcance, cadencia: tp.cadencia, dano: tp.dano,
+    velDardo: tp.velDardo, cor: tp.cor,
+    tempo: 0, nivel: 1, angulo: 0,
+    custoUp: Math.floor(tp.custo * 1.5),
+    investido: tp.custo
+  });
 }
 
 // ---------- Update ----------
 function update() {
   if (gameOver) return;
+
+  // Auto início da próxima rodada (só se o botão estiver ativado)
+  if (!rodadaAtiva && autoInicio) {
+    contagem--;
+    if (contagem <= 0) {
+      iniciarRodada();
+    } else if (contagem % 60 === 0) {
+      msg('⏳ Próxima rodada em ' + (contagem / 60) + 's...');
+    }
+  }
 
   // Spawn
   if (rodadaAtiva && fila.length > 0) {
@@ -154,13 +424,13 @@ function update() {
   }
   if (vidas <= 0) {
     vidas = 0; gameOver = true;
+    comprando = false;
     msg('💀 Game Over! Recarregue a página para jogar de novo.');
   }
 
   // Torres atiram
   for (const t of torres) {
     t.tempo--;
-    // alvo: balão mais avançado dentro do alcance
     let alvo = null;
     for (const b of baloes) {
       if (b.morto) continue;
@@ -173,11 +443,12 @@ function update() {
       if (t.tempo <= 0) {
         dardos.push({
           x: t.x, y: t.y,
-          vx: Math.cos(t.angulo) * 9,
-          vy: Math.sin(t.angulo) * 9,
-          vida: 40, dano: t.nivel
+          vx: Math.cos(t.angulo) * t.velDardo,
+          vy: Math.sin(t.angulo) * t.velDardo,
+          vida: Math.ceil(t.alcance / t.velDardo) + 6,
+          dano: t.dano + (t.nivel - 1)
         });
-        t.tempo = Math.max(10, t.cadencia - (t.nivel - 1) * 6);
+        t.tempo = Math.max(8, t.cadencia - (t.nivel - 1) * 4);
       }
     }
   }
@@ -194,7 +465,6 @@ function update() {
           b.morto = true;
           dinheiro += TIPOS[b.tipo].ganho;
         } else {
-          // atualiza cor/velocidade conforme a vida restante
           const novoTipo = Math.max(0, Math.min(b.tipo, b.hp - 1));
           b.tipo = novoTipo;
           b.vel = TIPOS[novoTipo].vel;
@@ -209,6 +479,7 @@ function update() {
   // Fim de rodada
   if (rodadaAtiva && fila.length === 0 && baloes.length === 0) {
     rodadaAtiva = false;
+    contagem = ESPERA_ENTRE;
     dinheiro += 100 + rodada * 10;
     msg('✅ Rodada ' + rodada + ' completa! Bônus recebido.');
   }
@@ -217,39 +488,25 @@ function update() {
 }
 
 // ---------- Desenho ----------
-function desenharCaminho() {
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.strokeStyle = '#c8a96a';
-  ctx.lineWidth = LARGURA_CAMINHO;
-  ctx.beginPath();
-  ctx.moveTo(caminho[0].x, caminho[0].y);
-  for (let i = 1; i < caminho.length; i++) ctx.lineTo(caminho[i].x, caminho[i].y);
-  ctx.stroke();
-}
-
 function desenharTorre(t, selecionada) {
   if (selecionada) {
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
     ctx.beginPath(); ctx.arc(t.x, t.y, t.alcance, 0, Math.PI * 2); ctx.fill();
   }
-  // corpo
-  ctx.fillStyle = '#8d5524';
+  ctx.fillStyle = t.cor;
   ctx.beginPath(); ctx.arc(t.x, t.y, 18, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
-  // "braço" apontando
-  ctx.strokeStyle = '#5d3a1a'; ctx.lineWidth = 6;
+  ctx.strokeStyle = '#2b1a0a'; ctx.lineWidth = 6;
   ctx.beginPath();
   ctx.moveTo(t.x, t.y);
   ctx.lineTo(t.x + Math.cos(t.angulo) * 22, t.y + Math.sin(t.angulo) * 22);
   ctx.stroke();
-  // nível
   ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'center';
   ctx.fillText('Nv' + t.nivel, t.x, t.y + 32);
 }
 
 function desenhar() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  desenharCaminho();
+  ctx.drawImage(fundo, 0, 0);   // grama + caminho texturizados
 
   for (const t of torres) desenharTorre(t, t === torreSelecionada);
 
@@ -268,10 +525,11 @@ function desenhar() {
 
   // Pré-visualização da torre ao comprar
   if (comprando) {
+    const tp = TORRES_TIPOS[tipoComprando];
     const valido = !sobreOCaminho(mouse) && !torres.some(t => dist(t, mouse) < 40);
     ctx.fillStyle = valido ? 'rgba(255,255,255,0.25)' : 'rgba(255,0,0,0.3)';
-    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 130, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = valido ? '#8d5524' : '#a33';
+    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, tp.alcance, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = valido ? tp.cor : '#a33';
     ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 18, 0, Math.PI * 2); ctx.fill();
   }
 
@@ -279,14 +537,18 @@ function desenhar() {
   if (torreSelecionada && !comprando) {
     const t = torreSelecionada;
     ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(10, canvas.height - 50, 330, 40);
+    ctx.fillRect(10, canvas.height - 50, 360, 40);
     ctx.fillStyle = '#fff'; ctx.font = '15px Arial'; ctx.textAlign = 'left';
-    ctx.fillText('Clique na torre de novo p/ upar (' + t.custoUp + ') | Vender: tecla V', 18, canvas.height - 25);
+    const txt = t.nivel >= 5
+      ? 'Nível máximo | Vender: tecla V'
+      : 'Clique na torre de novo p/ upar (' + t.custoUp + ') | Vender: tecla V';
+    ctx.fillText(txt, 18, canvas.height - 25);
   }
 }
 
 function loop() {
-  update();
+  // No 2x a lógica roda duas vezes por frame
+  for (let i = 0; i < velocidade; i++) update();
   desenhar();
   requestAnimationFrame(loop);
 }
@@ -302,31 +564,32 @@ canvas.addEventListener('click', () => {
   if (gameOver) return;
 
   if (comprando) {
+    const tp = TORRES_TIPOS[tipoComprando];
     const valido = !sobreOCaminho(mouse) && !torres.some(t => dist(t, mouse) < 40);
-    if (valido && dinheiro >= 100) {
-      dinheiro -= 100;
-      criarTorre(mouse.x, mouse.y);
+    if (valido && dinheiro >= tp.custo) {
+      dinheiro -= tp.custo;
+      criarTorre(mouse.x, mouse.y, tipoComprando);
       comprando = false;
-      document.getElementById('btnTorre').classList.remove('sel');
-      msg('Macaco colocado!');
+      msg(tp.nome + ' colocado!');
+      atualizarHUD();
     } else {
       msg('Local inválido!');
     }
     return;
   }
 
-  // Selecionar / upar torre
   const clicada = torres.find(t => dist(t, mouse) < 20);
   if (clicada) {
     if (torreSelecionada === clicada) {
-      if (dinheiro >= clicada.custoUp && clicada.nivel < 5) {
+      if (clicada.nivel >= 5) {
+        msg('Nível máximo!');
+      } else if (dinheiro >= clicada.custoUp) {
         dinheiro -= clicada.custoUp;
+        clicada.investido += clicada.custoUp;
         clicada.nivel++;
         clicada.alcance += 15;
         clicada.custoUp = Math.floor(clicada.custoUp * 1.6);
         msg('Torre melhorada para o nível ' + clicada.nivel + '!');
-      } else if (clicada.nivel >= 5) {
-        msg('Nível máximo!');
       } else {
         msg('Dinheiro insuficiente!');
       }
@@ -339,26 +602,52 @@ canvas.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', e => {
-  if (e.key.toLowerCase() === 'v' && torreSelecionada) {
-    dinheiro += 60 + (torreSelecionada.nivel - 1) * 50;
+  const k = e.key.toLowerCase();
+
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= TORRES_TIPOS.length) selecionarTipo(n - 1);
+
+  if (k === 'v' && torreSelecionada) {
+    dinheiro += Math.floor(torreSelecionada.investido * 0.7);
     torres = torres.filter(t => t !== torreSelecionada);
     torreSelecionada = null;
     msg('Torre vendida.');
   }
   if (e.key === 'Escape') {
     comprando = false;
-    document.getElementById('btnTorre').classList.remove('sel');
+    msg('');
+    atualizarHUD();
   }
 });
 
-document.getElementById('btnTorre').onclick = () => {
-  comprando = !comprando;
-  torreSelecionada = null;
-  document.getElementById('btnTorre').classList.toggle('sel', comprando);
-  if (comprando) msg('Clique em um lugar fora do caminho (ESC cancela).');
-};
-document.getElementById('btnRodada').onclick = iniciarRodada;
+// ---------- Botões do HUD ----------
+const btnAuto = document.getElementById('btnAuto');
+const btnVel1 = document.getElementById('btnVel1');
+const btnVel2 = document.getElementById('btnVel2');
 
+document.getElementById('btnRodada').onclick = function () {
+  iniciarRodada();
+  this.blur();
+};
+
+btnAuto.onclick = function () {
+  autoInicio = !autoInicio;
+  this.classList.toggle('on', autoInicio);
+  this.textContent = '🔁 Auto início: ' + (autoInicio ? 'ON' : 'OFF');
+  if (autoInicio) contagem = ESPERA_ENTRE;
+  msg(autoInicio ? 'Auto início ligado.' : 'Auto início desligado.');
+  this.blur();
+};
+
+function setVelocidade(v) {
+  velocidade = v;
+  btnVel1.classList.toggle('sel', v === 1);
+  btnVel2.classList.toggle('sel', v === 2);
+}
+btnVel1.onclick = function () { setVelocidade(1); this.blur(); };
+btnVel2.onclick = function () { setVelocidade(2); this.blur(); };
+
+gerarFundo();
 atualizarHUD();
 loop();
 </script>
